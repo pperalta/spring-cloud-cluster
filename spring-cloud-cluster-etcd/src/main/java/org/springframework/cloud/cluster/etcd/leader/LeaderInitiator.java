@@ -25,6 +25,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
@@ -45,10 +46,23 @@ import mousio.etcd4j.responses.EtcdException;
  */
 public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableBean {
 
+	private static final Logger logger = LoggerFactory.getLogger(LeaderInitiator.class);
+
+	/**
+	 * TTL for etcd entry in seconds.
+	 */
 	private final static int TTL = 10;
+
+	/**
+	 * Number of seconds to sleep between issuing heartbeats.
+	 */
 	private final static int HEART_BEAT_SLEEP = TTL / 2;
+
+	/**
+	 * Default namespace for etcd entry.
+	 */
 	private final static String DEFAULT_NAMESPACE = "spring-cloud";
-	
+
 	/**
 	 * {@link EtcdClient} instance.
 	 */
@@ -70,7 +84,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 			return thread;
 		}
 	});
-	
+
 	/**
 	 * Executor service for running leadership worker daemon.
 	 */
@@ -88,19 +102,19 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 	 * the leader.
 	 */
 	private volatile boolean isLeader = false;
-	
+
 	/**
 	 * Flag that indicates whether the current candidate's
 	 * leadership should be relinquished.
 	 */
 	private volatile boolean relinquishLeadership = false;
-	
+
 	/**
 	 * Future returned by submitting a {@link Initiator} to {@link #leaderExecutorService}.
 	 * This is used to cancel leadership.
 	 */
 	private volatile Future<Void> initiatorFuture;
-	
+
 	/**
 	 * Future returned by submitting a {@link Worker} to {@link #workerExecutorService}.
 	 * This is used to notify leadership revocation.
@@ -117,7 +131,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 	 * Leader event publisher if set.
 	 */
 	private LeaderEventPublisher leaderEventPublisher;
-	
+
 	/**
 	 * The {@link EtcdContext} instance.
 	 */
@@ -127,7 +141,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 	 * The base etcd path where candidate id is to be stored.
 	 */
 	private final String baseEtcdPath;
-	
+
 	/**
 	 * Construct a {@link LeaderInitiator}.
 	 *
@@ -186,10 +200,10 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 		workerExecutorService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
 		leaderExecutorService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
 	}
-	
+
 	/**
 	 * Sets the {@link LeaderEventPublisher}.
-	 * 
+	 *
 	 * @param leaderEventPublisher the event publisher
 	 */
 	public void setLeaderEventPublisher(LeaderEventPublisher leaderEventPublisher) {
@@ -206,16 +220,27 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 		}
 		workerFuture = workerExecutorService.submit(new Worker());
 	}
-	
+
 	/**
 	 * Notifies that the candidate's leadership was revoked.
 	 */
-	private void notifyRevoked() {
+	private void notifyRevoked() throws InterruptedException {
 		isLeader = false;
 		if (leaderEventPublisher != null) {
 			leaderEventPublisher.publishOnRevoked(LeaderInitiator.this, context);
 		}
-		workerFuture.cancel(true);
+		if (!workerFuture.isDone()) {
+			workerFuture.cancel(true);
+		}
+		try {
+			workerFuture.get();
+		}
+		catch (InterruptedException e) {
+			throw e;
+		}
+		catch (Exception e) {
+			logger.warn("Exception thrown by candidate", e);
+		}
 	}
 
 	/**
@@ -226,10 +251,10 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 			client.delete(baseEtcdPath).prevValue(candidate.getId()).send().get();
 		}
 		catch (EtcdException e) {
-			LoggerFactory.getLogger(getClass()).warn("Couldn't delete candidate's entry from etcd", e); 
+			logger.warn("Couldn't delete candidate's entry from etcd", e);
 		}
 		catch (IOException | TimeoutException e) {
-			LoggerFactory.getLogger(getClass()).warn("Couldn't access etcd", e);
+			logger.warn("Couldn't access etcd", e);
 		}
 	}
 
@@ -240,45 +265,32 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 	class Worker implements Callable<Void> {
 
 		@Override
-		public Void call() {
+		public Void call() throws InterruptedException {
 			try {
 				candidate.onGranted(context);
-			}
-			catch (InterruptedException e) {
-				// If the candidate's leadership was revoked
-				Thread.currentThread().interrupt();
-			}
-			catch (Throwable t) {
-				relinquishLeadership = true;
-				LoggerFactory.getLogger(getClass()).error("Some error occurred while "
-						+ "executing candidate's grant callback, relinquishing leadership...", t);
-			}
-			try {
 				Thread.sleep(Long.MAX_VALUE);
 			}
-			catch (InterruptedException e) {
-				// If the candidate's leadership was revoked
-			}
 			finally {
+				relinquishLeadership = true;
 				candidate.onRevoked(context);
 			}
 			return null;
 		}
 
 	}
-	
+
 	/**
 	 * Callable that manages the etcd heart beats for leadership election.
 	 */
 	class Initiator implements Callable<Void> {
-		
+
 		@Override
-		public Void call() {
+		public Void call() throws InterruptedException {
 			try {
 				while (running) {
 					if (relinquishLeadership) {
-						relinquishLeadership = false;
 						relinquishLeadership();
+						relinquishLeadership = false;
 					}
 					else if (isLeader) {
 						sendHeartBeat();
@@ -288,9 +300,6 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 					}
 					TimeUnit.SECONDS.sleep(HEART_BEAT_SLEEP);
 				}
-			}
-			catch (InterruptedException e) {
-				// If the initiator future was cancelled
 			}
 			finally {
 				if (isLeader) {
@@ -304,7 +313,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 		 * Relinquishes leadership of current candidate by deleting candidate's entry from
 		 * etcd and then notifies that the current candidate is no longer leader.
 		 */
-		private void relinquishLeadership() {
+		private void relinquishLeadership() throws InterruptedException {
 			tryDeleteCandidateEntry();
 			notifyRevoked();
 		}
@@ -315,7 +324,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 		 * candidate's leadership is revoked. If access to etcd fails, then the the current
 		 * candidate's leadership is relinquished.
 		 */
-		private void sendHeartBeat() {
+		private void sendHeartBeat() throws InterruptedException {
 			try {
 				client.put(baseEtcdPath, candidate.getId()).ttl(TTL).prevValue(candidate.getId()).send().get();
 			}
@@ -324,11 +333,11 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 			}
 			catch (IOException | TimeoutException e) {
 				// Couldn't access etcd, therefore, relinquish leadership
-				LoggerFactory.getLogger(getClass()).error("Couldn't access etcd, relinquishing leadership...", e);
+				logger.error("Couldn't access etcd, relinquishing leadership...", e);
 				notifyRevoked();
 			}
 		}
-		
+
 		/**
 		 * Tries to acquire leadership by posting the candidate's id to etcd. If the etcd call
 		 * is successful, it is assumed that the current candidate is now leader.
@@ -343,7 +352,7 @@ public class LeaderInitiator implements Lifecycle, InitializingBean, DisposableB
 			}
 			catch (IOException | TimeoutException e) {
 				// Couldn't access etcd, therefore, keep trying.
-				LoggerFactory.getLogger(getClass()).warn("Couldn't access etcd", e);
+				logger.warn("Couldn't access etcd", e);
 			}
 		}
 

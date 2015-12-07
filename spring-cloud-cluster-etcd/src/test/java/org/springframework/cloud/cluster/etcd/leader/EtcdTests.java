@@ -58,7 +58,7 @@ public class EtcdTests {
 		assertThat(listener.events.size(), is(1));
 		ctx.close();
 	}
-	
+
 	@Test
 	public void testLeaderYield() throws InterruptedException {
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(YieldTestConfig.class);
@@ -70,7 +70,7 @@ public class EtcdTests {
 		assertThat(listener.events.size(), is(2));
 		ctx.close();
 	}
-	
+
 	@Test
 	public void testBlockingThreadLeader() throws InterruptedException, IOException, EtcdException, TimeoutException {
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(BlockingThreadTestConfig.class);
@@ -84,7 +84,7 @@ public class EtcdTests {
 		assertThat(listener.events.size(), is(2));
 		ctx.close();
 	}
-	
+
 	@Test
 	public void testFailingCandidateGrantCallback() throws InterruptedException {
 		AnnotationConfigApplicationContext ctx = new AnnotationConfigApplicationContext(FailingCandidateTestConfig.class);
@@ -92,7 +92,7 @@ public class EtcdTests {
 		YieldTestEventListener listener = ctx.getBean(YieldTestEventListener.class);
 		assertThat(candidate.onGrantedLatch.await(5, TimeUnit.SECONDS), is(true));
 		assertThat(candidate.onRevokedLatch.await(10, TimeUnit.SECONDS), is(true));
-		assertThat(listener.onEventsLatch.await(1, TimeUnit.MILLISECONDS), is(true));
+		assertThat(listener.onEventsLatch.await(10, TimeUnit.SECONDS), is(true));
 		assertThat(listener.events.size(), is(2));
 		ctx.close();
 	}
@@ -120,13 +120,13 @@ public class EtcdTests {
 		@Bean
 		public LeaderEventPublisher leaderEventPublisher() {
 			return new DefaultLeaderEventPublisher();
-		}		
-		
+		}
+
 		@Bean
 		public TestEventListener testEventListener() {
 			return new TestEventListener();
 		}
-		
+
 	}
 
 	static class TestCandidate extends DefaultCandidate {
@@ -144,17 +144,17 @@ public class EtcdTests {
 	static class TestEventListener implements ApplicationListener<AbstractLeaderEvent> {
 
 		CountDownLatch onEventLatch = new CountDownLatch(1);
-		
+
 		ArrayList<AbstractLeaderEvent> events = new ArrayList<AbstractLeaderEvent>();
-		
+
 		@Override
 		public void onApplicationEvent(AbstractLeaderEvent event) {
 			events.add(event);
 			onEventLatch.countDown();
 		}
-		
+
 	}
-	
+
 	@Configuration
 	static class YieldTestConfig {
 
@@ -178,15 +178,15 @@ public class EtcdTests {
 		@Bean
 		public LeaderEventPublisher leaderEventPublisher() {
 			return new DefaultLeaderEventPublisher();
-		}		
-		
+		}
+
 		@Bean
 		public YieldTestEventListener testEventListener() {
 			return new YieldTestEventListener();
 		}
-		
+
 	}
-	
+
 	static class YieldTestCandidate extends DefaultCandidate {
 
 		CountDownLatch onGrantedLatch = new CountDownLatch(1);
@@ -198,7 +198,7 @@ public class EtcdTests {
 			onGrantedLatch.countDown();
 			ctx.yield();
 		}
-		
+
 		@Override
 		public void onRevoked(Context ctx) {
 			super.onRevoked(ctx);
@@ -210,17 +210,17 @@ public class EtcdTests {
 	static class YieldTestEventListener implements ApplicationListener<AbstractLeaderEvent> {
 
 		CountDownLatch onEventsLatch = new CountDownLatch(2);
-		
+
 		ArrayList<AbstractLeaderEvent> events = new ArrayList<AbstractLeaderEvent>();
-		
+
 		@Override
 		public void onApplicationEvent(AbstractLeaderEvent event) {
 			events.add(event);
 			onEventsLatch.countDown();
 		}
-		
+
 	}
-	
+
 	@Configuration
 	static class BlockingThreadTestConfig {
 
@@ -244,15 +244,15 @@ public class EtcdTests {
 		@Bean
 		public LeaderEventPublisher leaderEventPublisher() {
 			return new DefaultLeaderEventPublisher();
-		}		
-		
+		}
+
 		@Bean
 		public YieldTestEventListener testEventListener() {
 			return new YieldTestEventListener();
 		}
-		
+
 	}
-	
+
 	static class BlockingThreadTestCandidate extends AbstractCandidate {
 
 		CountDownLatch onGrantedLatch = new CountDownLatch(1);
@@ -275,7 +275,7 @@ public class EtcdTests {
 				}
 			}
 		}
-		
+
 		@Override
 		public void onRevoked(Context ctx) {
 			LoggerFactory.getLogger(getClass()).info("{} leadership has been revoked", this, ctx);
@@ -283,7 +283,7 @@ public class EtcdTests {
 		}
 
 	}
-	
+
 	@Configuration
 	static class FailingCandidateTestConfig {
 
@@ -307,15 +307,15 @@ public class EtcdTests {
 		@Bean
 		public LeaderEventPublisher leaderEventPublisher() {
 			return new DefaultLeaderEventPublisher();
-		}		
-		
+		}
+
 		@Bean
 		public YieldTestEventListener testEventListener() {
 			return new YieldTestEventListener();
 		}
-		
+
 	}
-	
+
 	static class FailingTestCandidate extends DefaultCandidate {
 
 		CountDownLatch onGrantedLatch = new CountDownLatch(1);
@@ -327,7 +327,7 @@ public class EtcdTests {
 			onGrantedLatch.countDown();
 			throw new RuntimeException("Candidate grant callback failure");
 		}
-		
+
 		@Override
 		public void onRevoked(Context ctx) {
 			super.onRevoked(ctx);
@@ -335,5 +335,5 @@ public class EtcdTests {
 		}
 
 	}
-	
+
 }
